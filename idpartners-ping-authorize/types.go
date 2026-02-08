@@ -2,6 +2,37 @@ package main
 
 import "encoding/json"
 
+// MCPContext holds extracted MCP fields for the sideband payload.
+type MCPContext struct {
+	Method        string          `json:"mcp_method"`                   // JSON-RPC method (e.g. "tools/call")
+	ToolName      string          `json:"mcp_tool_name,omitempty"`      // tools/call: $.params.name
+	ToolArguments json.RawMessage `json:"mcp_tool_arguments,omitempty"` // tools/call: $.params.arguments
+	ResourceURI   string          `json:"mcp_resource_uri,omitempty"`   // resources/read: $.params.uri
+	PromptName    string          `json:"mcp_prompt_name,omitempty"`    // prompts/get: $.params.name
+	JsonrpcID     json.RawMessage `json:"mcp_jsonrpc_id,omitempty"`     // $.id (string or int)
+}
+
+// JsonRPCRequest is the minimal structure for parsing JSON-RPC 2.0 requests.
+type JsonRPCRequest struct {
+	Jsonrpc string          `json:"jsonrpc"`
+	Method  string          `json:"method"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Params  json.RawMessage `json:"params,omitempty"`
+}
+
+// JsonRPCError is the JSON-RPC 2.0 error response format.
+type JsonRPCError struct {
+	Jsonrpc string             `json:"jsonrpc"`
+	ID      json.RawMessage    `json:"id"`
+	Error   JsonRPCErrorDetail `json:"error"`
+}
+
+// JsonRPCErrorDetail holds the code and message for a JSON-RPC error.
+type JsonRPCErrorDetail struct {
+	Code    int    `json:"code"`
+	Message string `json:"message"`
+}
+
 // SidebandAccessRequest is the payload sent to POST /sideband/request during the access phase.
 type SidebandAccessRequest struct {
 	SourceIP          string              `json:"source_ip"`
@@ -12,6 +43,9 @@ type SidebandAccessRequest struct {
 	Headers           []map[string]string `json:"headers"`
 	HTTPVersion       string              `json:"http_version"`
 	ClientCertificate *JWK                `json:"client_certificate,omitempty"`
+	TrafficType       string              `json:"traffic_type,omitempty"`
+	MCP               *MCPContext         `json:"mcp,omitempty"`
+	ExtractedHeaders  map[string]string   `json:"extracted_headers,omitempty"`
 }
 
 // SidebandAccessResponse is the response from POST /sideband/request.
@@ -48,6 +82,8 @@ type SidebandResponsePayload struct {
 	HTTPVersion    string                 `json:"http_version"`
 	State          json.RawMessage        `json:"state,omitempty"`
 	Request        *SidebandAccessRequest `json:"request,omitempty"`
+	TrafficType    string                 `json:"traffic_type,omitempty"`
+	MCP            *MCPContext            `json:"mcp,omitempty"`
 }
 
 // SidebandResponseResult is the response from POST /sideband/response.

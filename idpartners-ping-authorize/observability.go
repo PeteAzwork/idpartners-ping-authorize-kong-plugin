@@ -77,6 +77,9 @@ type PluginMetrics struct {
 	SidebandTotal     metric.Int64Counter
 	CircuitBreakerSt  metric.Int64Gauge
 	PolicyDecisions   metric.Int64Counter
+	MCPRequestsTotal  metric.Int64Counter // MCP requests by mcp_method
+	MCPDeniedTotal    metric.Int64Counter // MCP denied requests by mcp_method, reason
+	MCPToolCallsTotal metric.Int64Counter // MCP tool calls by tool_name
 }
 
 // InitOTel initializes OpenTelemetry trace and metric providers.
@@ -128,11 +131,22 @@ func InitOTel(ctx context.Context) (func(context.Context) error, *PluginMetrics,
 	policyDecisions, _ := meter.Int64Counter("ping_authorize_policy_decisions_total",
 		metric.WithDescription("Policy decision counts"))
 
+	// MCP-specific metrics
+	mcpRequestsTotal, _ := meter.Int64Counter("ping_authorize_mcp_requests_total",
+		metric.WithDescription("Total MCP requests by method"))
+	mcpDeniedTotal, _ := meter.Int64Counter("ping_authorize_mcp_denied_total",
+		metric.WithDescription("Total MCP denied requests by method and reason"))
+	mcpToolCallsTotal, _ := meter.Int64Counter("ping_authorize_mcp_tool_calls_total",
+		metric.WithDescription("Total MCP tool calls by tool name"))
+
 	metrics := &PluginMetrics{
-		SidebandDuration: sidebandDuration,
-		SidebandTotal:    sidebandTotal,
-		CircuitBreakerSt: cbState,
-		PolicyDecisions:  policyDecisions,
+		SidebandDuration:  sidebandDuration,
+		SidebandTotal:     sidebandTotal,
+		CircuitBreakerSt:  cbState,
+		PolicyDecisions:   policyDecisions,
+		MCPRequestsTotal:  mcpRequestsTotal,
+		MCPDeniedTotal:    mcpDeniedTotal,
+		MCPToolCallsTotal: mcpToolCallsTotal,
 	}
 
 	shutdown := func(ctx context.Context) error {
@@ -187,9 +201,15 @@ func TruncateBody(body string, maxBytes int) string {
 }
 
 // DebugLogPayload logs a sideband payload with redaction and truncation.
+// When MCP context is present, logs mcp_method, mcp_tool_name, and traffic_type at Info level.
 func DebugLogPayload(logger *PluginLogger, direction string, payload interface{}, config *Config) {
 	if !config.EnableDebugLogging {
 		return
+	}
+
+	// Log MCP-specific fields at Info level when MCP is detected
+	if config.EnableMCP {
+		logMCPContext(logger, direction, payload, config)
 	}
 
 	b, err := json.Marshal(payload)
@@ -200,4 +220,46 @@ func DebugLogPayload(logger *PluginLogger, direction string, payload interface{}
 
 	body := TruncateBody(string(b), config.DebugBodyMaxBytes)
 	logger.Debug(direction, "payload", body)
+}
+
+// logMCPContext extracts and logs MCP-specific fields from sideband payloads.
+func logMCPContext(logger *PluginLogger, direction string, payload interface{}, config *Config) {
+	var mcpCtx *MCPContext
+	var trafficType string
+
+	switch p := payload.(type) {
+	case *SidebandAccessRequest:
+		mcpCtx = p.MCP
+		trafficType = p.TrafficType
+	case *SidebandResponsePayload:
+		mcpCtx = p.MCP
+		trafficType = p.TrafficType
+	default:
+		return
+	}
+
+	if mcpCtx == nil {
+		return
+	}
+
+	kvs := []interface{}{
+		"traffic_type", trafficType,
+		"mcp_method", mcpCtx.Method,
+	}
+
+	if mcpCtx.ToolName != "" {
+		kvs = append(kvs, "mcp_tool_name", mcpCtx.ToolName)
+	}
+	if mcpCtx.ResourceURI != "" {
+		kvs = append(kvs, "mcp_resource_uri", mcpCtx.ResourceURI)
+	}
+	if mcpCtx.PromptName != "" {
+		kvs = append(kvs, "mcp_prompt_name", mcpCtx.PromptName)
+	}
+	if mcpCtx.ToolArguments != nil {
+		args := TruncateBody(string(mcpCtx.ToolArguments), config.DebugBodyMaxBytes)
+		kvs = append(kvs, "mcp_tool_arguments", args)
+	}
+
+	logger.Info(direction+" [MCP]", kvs...)
 }

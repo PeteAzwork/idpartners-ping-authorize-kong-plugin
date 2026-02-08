@@ -2,7 +2,7 @@
 
 A Kong Gateway Go plugin that integrates with PingAuthorize via the Sideband API protocol. It intercepts requests during Kong's access and response phases to consult PingAuthorize for policy decisions (allow, deny, or modify).
 
-**Version:** 2.0.0
+**Version:** 2.1.0
 **Kong:** 3.x (Go external process plugin)
 **Priority:** 999
 
@@ -193,6 +193,57 @@ services:
 | `redact_headers` | []string | [authorization, cookie] | Headers to redact in debug logs. |
 | `debug_body_max_bytes` | int | 8192 | Max body size in debug logs. 0 disables truncation. |
 
+### MCP Support (v2.1.0)
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enable_mcp` | bool | false | Enable MCP (Model Context Protocol) detection and JSON-RPC enrichment. |
+| `mcp_jsonrpc_errors` | bool | false | Return JSON-RPC 2.0 error format for denied MCP requests. |
+| `max_sideband_body_bytes` | int | 0 | Max sideband payload size in bytes. 0 = unlimited. Body is truncated when exceeded. |
+| `extract_headers` | []string | [] | Headers to extract as top-level `extracted_headers` in sideband payload. |
+| `mcp_retry_methods` | []string | [tools/list, resources/list, prompts/list, initialize] | MCP methods safe to retry on failure. Non-listed methods (e.g. `tools/call`) are never retried. |
+
+## MCP Support
+
+When `enable_mcp` is `true`, the plugin detects MCP (Model Context Protocol) JSON-RPC 2.0 traffic and enriches sideband payloads with MCP-specific fields:
+
+- **`traffic_type: "mcp"`** is added to sideband payloads when MCP traffic is detected
+- **`mcp` object** containing `mcp_method`, `mcp_tool_name`, `mcp_tool_arguments`, `mcp_resource_uri`, and `mcp_jsonrpc_id`
+- **SSE stream parsing** extracts the final JSON-RPC response from `text/event-stream` upstream responses
+- **MCP-aware retry** prevents retrying non-idempotent methods like `tools/call` while allowing retry of list operations
+- **JSON-RPC error responses** (when `mcp_jsonrpc_errors` is enabled) wraps deny responses in JSON-RPC 2.0 error format
+
+**Supported MCP methods:** `tools/call`, `tools/list`, `resources/read`, `resources/list`, `prompts/get`, `prompts/list`, `initialize`
+
+### Example: MCP Route Configuration
+
+```yaml
+plugins:
+  - name: idpartners-ping-authorize
+    config:
+      service_url: "https://pingauthorize.example.com:443"
+      shared_secret: "{vault://env/PAZ_SECRET}"
+      secret_header_name: "X-Ping-Secret"
+      enable_mcp: true
+      mcp_jsonrpc_errors: true
+      extract_headers:
+        - "authorization"
+        - "x-session-id"
+      mcp_retry_methods:
+        - "tools/list"
+        - "resources/list"
+        - "prompts/list"
+        - "initialize"
+```
+
+When `mcp_jsonrpc_errors` is enabled, denied MCP requests receive JSON-RPC 2.0 error responses:
+
+```json
+{"jsonrpc":"2.0","id":1,"error":{"code":-32600,"message":"Access denied"}}
+```
+
+When `enable_mcp` is `false` (default), no MCP detection or enrichment occurs and the plugin behaves identically to v2.0.0.
+
 ## Error Handling
 
 The plugin defaults to **fail-closed**: if PingAuthorize is unreachable, requests are blocked with HTTP 502.
@@ -223,6 +274,9 @@ export OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4317
 - `ping_authorize_sideband_total` (counter, labels: phase, result)
 - `ping_authorize_circuit_breaker_state` (gauge, 0=closed, 1=open)
 - `ping_authorize_policy_decisions_total` (counter, labels: decision)
+- `ping_authorize_mcp_requests_total` (counter, labels: mcp_method) — MCP requests only
+- `ping_authorize_mcp_denied_total` (counter, labels: mcp_method, reason) — MCP denied requests
+- `ping_authorize_mcp_tool_calls_total` (counter, labels: tool_name) — per-tool call tracking
 
 ## Debugging
 

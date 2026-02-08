@@ -11,7 +11,7 @@ import (
 
 const (
 	PluginName = "idpartners-ping-authorize"
-	Version    = "2.0.0"
+	Version    = "2.1.0"
 	Priority   = 999
 )
 
@@ -28,6 +28,8 @@ func New() interface{} {
 		StripAcceptEncoding:   true,
 		RedactHeaders:         []string{"authorization", "cookie"},
 		DebugBodyMaxBytes:     8192,
+		// MCP defaults
+		MCPRetryMethods:      []string{"tools/list", "resources/list", "prompts/list", "initialize"},
 	}
 }
 

@@ -105,7 +105,7 @@ func TestExecute_SuccessfulRequest(t *testing.T) {
 
 	client := NewSidebandHTTPClient(config)
 
-	status, _, body, err := client.Execute(context.Background(), server.URL+"/sideband/request", []byte(`{}`), parsed)
+	status, _, body, err := client.Execute(context.Background(), server.URL+"/sideband/request", []byte(`{}`), parsed, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -147,7 +147,7 @@ func TestExecute_RetryOnServerError(t *testing.T) {
 
 	client := NewSidebandHTTPClient(config)
 
-	status, _, body, err := client.Execute(context.Background(), server.URL+"/sideband/request", []byte(`{}`), parsed)
+	status, _, body, err := client.Execute(context.Background(), server.URL+"/sideband/request", []byte(`{}`), parsed, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -184,7 +184,7 @@ func TestExecute_RetryExhausted(t *testing.T) {
 
 	client := NewSidebandHTTPClient(config)
 
-	status, _, _, err := client.Execute(context.Background(), server.URL+"/sideband/request", []byte(`{}`), parsed)
+	status, _, _, err := client.Execute(context.Background(), server.URL+"/sideband/request", []byte(`{}`), parsed, "")
 	if err == nil {
 		t.Fatal("expected error after exhausting retries")
 	}
@@ -220,7 +220,7 @@ func TestExecute_CircuitBreakerTripsOn429(t *testing.T) {
 
 	client := NewSidebandHTTPClient(config)
 
-	status, _, _, err := client.Execute(context.Background(), server.URL+"/sideband/request", []byte(`{}`), parsed)
+	status, _, _, err := client.Execute(context.Background(), server.URL+"/sideband/request", []byte(`{}`), parsed, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -234,7 +234,7 @@ func TestExecute_CircuitBreakerTripsOn429(t *testing.T) {
 	}
 
 	// Next request should be rejected by circuit breaker
-	_, _, _, err = client.Execute(context.Background(), server.URL+"/sideband/request", []byte(`{}`), parsed)
+	_, _, _, err = client.Execute(context.Background(), server.URL+"/sideband/request", []byte(`{}`), parsed, "")
 	if err == nil {
 		t.Fatal("expected circuit breaker error")
 	}
@@ -269,7 +269,7 @@ func TestExecute_NoRetryOn4xx(t *testing.T) {
 
 	client := NewSidebandHTTPClient(config)
 
-	status, _, _, err := client.Execute(context.Background(), server.URL+"/sideband/request", []byte(`{}`), parsed)
+	status, _, _, err := client.Execute(context.Background(), server.URL+"/sideband/request", []byte(`{}`), parsed, "")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

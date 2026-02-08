@@ -48,8 +48,9 @@ func NewSidebandHTTPClient(config *Config) *SidebandHTTPClient {
 
 // Execute sends a POST request to the given path with the provided JSON body.
 // It checks the circuit breaker, applies retries, and trips the breaker on final failure.
+// mcpMethod is the MCP method name (e.g. "tools/call") for retry awareness, or empty for non-MCP requests.
 // Returns the response status code, headers, body, and any error.
-func (c *SidebandHTTPClient) Execute(ctx context.Context, requestURL string, body []byte, parsedURL *ParsedURL) (int, http.Header, []byte, error) {
+func (c *SidebandHTTPClient) Execute(ctx context.Context, requestURL string, body []byte, parsedURL *ParsedURL, mcpMethod string) (int, http.Header, []byte, error) {
 	// Check circuit breaker
 	ok, cbErr := c.cb.Allow()
 	if !ok {
@@ -62,6 +63,11 @@ func (c *SidebandHTTPClient) Execute(ctx context.Context, requestURL string, bod
 	var lastBody []byte
 
 	maxAttempts := 1 + c.config.MaxRetries
+
+	// MCP-aware retry: non-retryable MCP methods get only 1 attempt
+	if mcpMethod != "" && !isMCPMethodRetryable(mcpMethod, c.config.MCPRetryMethods) {
+		maxAttempts = 1
+	}
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {

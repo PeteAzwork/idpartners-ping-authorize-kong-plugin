@@ -72,7 +72,7 @@ func executeResponse(kong *pdk.PDK, conf *Config) {
 	if err != nil {
 		// Check circuit breaker error
 		if cbErr, ok := err.(*CircuitBreakerOpenError); ok {
-			handleCircuitBreakerErrorResponse(kong, cbErr, conf)
+			handleCircuitBreakerErrorResponse(kong, cbErr, conf, originalRequest)
 			return
 		}
 
@@ -141,10 +141,21 @@ func composeResponsePayload(kong *pdk.PDK, conf *Config, originalRequest *Sideba
 		return nil, fmt.Errorf("failed to get HTTP version: %w", err)
 	}
 
+	responseBody := string(responseBodyBytes)
+
+	// MCP: SSE stream parsing — extract final JSON-RPC message
+	if conf.EnableMCP {
+		contentType := getResponseContentType(responseHeaders)
+		if isSSEContentType(contentType) {
+			finalMsg := ParseSSEFinalMessage(responseBodyBytes, contentType)
+			responseBody = string(finalMsg)
+		}
+	}
+
 	payload := &SidebandResponsePayload{
 		Method:         method,
 		URL:            reqURL,
-		Body:           string(responseBodyBytes),
+		Body:           responseBody,
 		ResponseCode:   strconv.Itoa(statusCode),
 		ResponseStatus: getStatusString(statusCode),
 		Headers:        formattedHeaders,
@@ -158,7 +169,31 @@ func composeResponsePayload(kong *pdk.PDK, conf *Config, originalRequest *Sideba
 		payload.Request = originalRequest
 	}
 
+	// MCP: add MCP context to response payload
+	if conf.EnableMCP {
+		// Try to parse the response body itself for MCP context
+		mcpCtx := ParseMCPRequest([]byte(responseBody))
+		if mcpCtx != nil {
+			payload.TrafficType = "mcp"
+			payload.MCP = mcpCtx
+		} else if originalRequest != nil && originalRequest.MCP != nil {
+			// Carry forward MCP context from the original request
+			payload.TrafficType = "mcp"
+			payload.MCP = originalRequest.MCP
+		}
+	}
+
 	return payload, nil
+}
+
+// getResponseContentType extracts the Content-Type header value from response headers.
+func getResponseContentType(headers map[string][]string) string {
+	for name, values := range headers {
+		if strings.EqualFold(name, "content-type") && len(values) > 0 {
+			return values[0]
+		}
+	}
+	return ""
 }
 
 // handleResponseResult processes the response from /sideband/response.
@@ -191,7 +226,7 @@ func handleResponseResult(kong *pdk.PDK, conf *Config, result *SidebandResponseR
 	kong.Response.Exit(statusCode, []byte(result.Body), policyHeaders)
 }
 
-// loadPerRequestContext retrieves the original request and state from Kong's per-request context.
+// loadPerRequestContext retrieves the original request, state, and MCP context from Kong's per-request context.
 func loadPerRequestContext(kong *pdk.PDK) (*SidebandAccessRequest, json.RawMessage, error) {
 	reqStr, err := kong.Ctx.GetSharedString("paz_original_request")
 	if err != nil {
@@ -205,6 +240,16 @@ func loadPerRequestContext(kong *pdk.PDK) (*SidebandAccessRequest, json.RawMessa
 		}
 	}
 
+	// Restore MCP context if stored
+	mcpStr, mcpErr := kong.Ctx.GetSharedString(mcpContextKey)
+	if mcpErr == nil && mcpStr != "" {
+		var mcpCtx MCPContext
+		if err := json.Unmarshal([]byte(mcpStr), &mcpCtx); err == nil {
+			req.MCP = &mcpCtx
+			req.TrafficType = "mcp"
+		}
+	}
+
 	stateStr, err := kong.Ctx.GetSharedString("paz_state")
 	var state json.RawMessage
 	if err == nil && stateStr != "" {
@@ -215,12 +260,24 @@ func loadPerRequestContext(kong *pdk.PDK) (*SidebandAccessRequest, json.RawMessa
 }
 
 // handleCircuitBreakerErrorResponse handles circuit breaker errors in the response phase.
-func handleCircuitBreakerErrorResponse(kong *pdk.PDK, cbErr *CircuitBreakerOpenError, conf *Config) {
+func handleCircuitBreakerErrorResponse(kong *pdk.PDK, cbErr *CircuitBreakerOpenError, conf *Config, originalRequest *SidebandAccessRequest) {
 	if cbErr.Trigger == Trigger429 {
 		remainingSec := (cbErr.RemainingMs + 999) / 1000
 		if remainingSec < 1 {
 			remainingSec = 1
 		}
+
+		// JSON-RPC error format for MCP traffic
+		if conf.MCPJsonrpcErrors && originalRequest != nil && originalRequest.MCP != nil {
+			msg := fmt.Sprintf("Service temporarily unavailable. Retry after %d seconds.", remainingSec)
+			body := formatMCPDenyResponse(429, msg, originalRequest.MCP.JsonrpcID)
+			kong.Response.Exit(429, body, map[string][]string{
+				"Content-Type": {"application/json"},
+				"Retry-After":  {strconv.FormatInt(remainingSec, 10)},
+			})
+			return
+		}
+
 		body := fmt.Sprintf(`{"code":"LIMIT_EXCEEDED","message":"The request exceeded the allowed rate limit. Please try after %d second."}`, remainingSec)
 		kong.Response.Exit(429, []byte(body), map[string][]string{
 			"Content-Type": {"application/json"},
@@ -231,6 +288,15 @@ func handleCircuitBreakerErrorResponse(kong *pdk.PDK, cbErr *CircuitBreakerOpenE
 
 	if conf.FailOpen {
 		return // pass upstream response through
+	}
+
+	// JSON-RPC error format for MCP traffic
+	if conf.MCPJsonrpcErrors && originalRequest != nil && originalRequest.MCP != nil {
+		body := formatMCPDenyResponse(502, "Service temporarily unavailable.", originalRequest.MCP.JsonrpcID)
+		kong.Response.Exit(502, body, map[string][]string{
+			"Content-Type": {"application/json"},
+		})
+		return
 	}
 	kong.Response.Exit(502, nil, nil)
 }

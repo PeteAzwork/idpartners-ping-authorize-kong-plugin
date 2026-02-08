@@ -29,8 +29,14 @@ func (p *SidebandProvider) EvaluateRequest(ctx context.Context, req *SidebandAcc
 		return nil, fmt.Errorf("failed to encode access request: %w", err)
 	}
 
+	// Extract MCP method for retry awareness
+	mcpMethod := ""
+	if req.MCP != nil {
+		mcpMethod = req.MCP.Method
+	}
+
 	requestURL := BuildSidebandURL(p.parsedURL, "/sideband/request")
-	statusCode, _, respBody, err := p.httpClient.Execute(ctx, requestURL, body, p.parsedURL)
+	statusCode, _, respBody, err := p.httpClient.Execute(ctx, requestURL, body, p.parsedURL, mcpMethod)
 	if err != nil {
 		return nil, err
 	}
@@ -62,8 +68,14 @@ func (p *SidebandProvider) EvaluateResponse(ctx context.Context, req *SidebandRe
 		return nil, fmt.Errorf("failed to encode response payload: %w", err)
 	}
 
+	// Extract MCP method for retry awareness
+	mcpMethod := ""
+	if req.MCP != nil {
+		mcpMethod = req.MCP.Method
+	}
+
 	requestURL := BuildSidebandURL(p.parsedURL, "/sideband/response")
-	statusCode, _, respBody, err := p.httpClient.Execute(ctx, requestURL, body, p.parsedURL)
+	statusCode, _, respBody, err := p.httpClient.Execute(ctx, requestURL, body, p.parsedURL, mcpMethod)
 	if err != nil {
 		return nil, err
 	}

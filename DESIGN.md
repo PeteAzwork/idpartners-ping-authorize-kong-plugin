@@ -1386,3 +1386,86 @@ plugins:
       redact_headers: ["authorization", "cookie", "x-api-key"]
       debug_body_max_bytes: 8192
 ```
+
+## 12. MCP Support (v2.1.0)
+
+### 12.1 Overview
+
+MCP (Model Context Protocol) support adds the ability to detect, parse, and enrich JSON-RPC 2.0 MCP traffic passing through Kong. When `enable_mcp` is `true`, the plugin inspects request bodies for MCP JSON-RPC messages and adds MCP context to sideband payloads, enabling PingAuthorize to make MCP-aware authorization decisions.
+
+### 12.2 MCP Sideband Payload Schema
+
+**Access Request (additional fields when MCP detected):**
+
+```json
+{
+  "traffic_type": "mcp",
+  "mcp": {
+    "mcp_method": "tools/call",
+    "mcp_tool_name": "get_weather",
+    "mcp_tool_arguments": {"city": "London"},
+    "mcp_jsonrpc_id": 1
+  },
+  "extracted_headers": {
+    "authorization": "Bearer token..."
+  }
+}
+```
+
+**Response Payload (additional fields):**
+
+```json
+{
+  "traffic_type": "mcp",
+  "mcp": {
+    "mcp_method": "tools/call",
+    "mcp_tool_name": "get_weather",
+    "mcp_jsonrpc_id": 1
+  }
+}
+```
+
+### 12.3 SSE Stream Handling
+
+When the upstream response has `Content-Type: text/event-stream`, the plugin extracts the last JSON-RPC response from the SSE event stream. SSE events are `data: <json>\n\n` separated. Only the final JSON-RPC response (with `id` field) is sent to PingAuthorize for evaluation.
+
+### 12.4 JSON-RPC Error Response Format
+
+When `mcp_jsonrpc_errors` is `true` and the request is MCP traffic, deny responses are formatted as JSON-RPC 2.0 errors:
+
+```json
+{"jsonrpc": "2.0", "id": 1, "error": {"code": -32600, "message": "Access denied"}}
+```
+
+**HTTP to JSON-RPC error code mapping:**
+
+| HTTP Status | JSON-RPC Code | Meaning |
+|-------------|---------------|---------|
+| 400 | -32600 | Invalid Request |
+| 401/403 | -32600 | Invalid Request (unauthorized) |
+| 404 | -32601 | Method not found |
+| 429 | -32000 | Server error (rate limited) |
+| 500 | -32603 | Internal error |
+| 502/503 | -32000 | Server error (unavailable) |
+
+### 12.5 Tool Argument Modification
+
+When PingAuthorize modifies the request body for an MCP `tools/call` request, the plugin validates that the modified body is still valid JSON-RPC 2.0. If validation fails, the body is used as-is with a warning logged.
+
+### 12.6 Tools/List Response Filtering
+
+PingAuthorize can filter `tools/list` and `resources/list` responses by returning a modified body in the `SidebandResponseResult`. The plugin passes the modified body through to the client, enabling tool-level authorization.
+
+### 12.7 MCP-Aware Retry
+
+Non-idempotent MCP methods (`tools/call`, `resources/read`, `prompts/get`) are never retried by default. Idempotent methods (`tools/list`, `resources/list`, `prompts/list`, `initialize`) follow normal retry configuration. The `mcp_retry_methods` config field allows operators to override which methods are retryable.
+
+### 12.8 MCP Configuration Fields
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `enable_mcp` | bool | false | Master toggle for MCP detection |
+| `mcp_jsonrpc_errors` | bool | false | Return JSON-RPC 2.0 error format |
+| `max_sideband_body_bytes` | int | 0 | Max payload size (0 = unlimited) |
+| `extract_headers` | []string | [] | Headers to extract as top-level fields |
+| `mcp_retry_methods` | []string | [tools/list, resources/list, prompts/list, initialize] | Retryable MCP methods |

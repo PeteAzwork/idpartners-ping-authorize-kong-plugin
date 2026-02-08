@@ -45,6 +45,13 @@ type Config struct {
 	RedactHeaders      []string `json:"redact_headers"`
 	DebugBodyMaxBytes  int      `json:"debug_body_max_bytes"`
 
+	// MCP support
+	EnableMCP            bool     `json:"enable_mcp"`              // Master toggle for MCP detection and enrichment
+	MCPJsonrpcErrors     bool     `json:"mcp_jsonrpc_errors"`      // Return JSON-RPC 2.0 error format for MCP traffic
+	MaxSidebandBodyBytes int      `json:"max_sideband_body_bytes"` // Max sideband payload size in bytes, 0 = unlimited
+	ExtractHeaders       []string `json:"extract_headers"`         // Headers to extract as top-level fields in sideband payload
+	MCPRetryMethods      []string `json:"mcp_retry_methods"`       // MCP methods safe to retry on failure
+
 	// Lazy-initialized fields
 	httpClientOnce sync.Once
 	httpClient     *SidebandHTTPClient
@@ -96,6 +103,14 @@ func (c *Config) Validate() error {
 	if c.DebugBodyMaxBytes < 0 {
 		return fmt.Errorf("debug_body_max_bytes must be >= 0")
 	}
+	if c.MaxSidebandBodyBytes < 0 {
+		return fmt.Errorf("max_sideband_body_bytes must be >= 0")
+	}
+	for _, m := range c.MCPRetryMethods {
+		if !IsMCPMethod(m) {
+			return fmt.Errorf("mcp_retry_methods contains invalid MCP method %q", m)
+		}
+	}
 
 	return nil
 }
@@ -128,5 +143,8 @@ func (c *Config) applyDefaults() {
 	}
 	if c.DebugBodyMaxBytes == 0 {
 		c.DebugBodyMaxBytes = 8192
+	}
+	if c.MCPRetryMethods == nil {
+		c.MCPRetryMethods = []string{"tools/list", "resources/list", "prompts/list", "initialize"}
 	}
 }
